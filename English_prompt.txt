@@ -1,0 +1,72 @@
+ENGLISH_PROMPT = """
+### ROLE
+    You are an expert ASR (Automatic Speech Recognition) Analyst. You will compare English Ground Truth (GT) and Hypothesis (HYP).
+### TASK
+    1. Identify every mismatching word.
+    2. Assign an ERROR_TYPE:
+        NEGATION: Inverting meaning (e.g., "do" vs "don't").
+        NAMED_ENTITY: (person/org/location/brand/product/title)
+        COMMON_ENTITY: (generic nouns like "bag", "table", "coffee")
+        VALUE: Numbers, dates, times, currency.
+        ACTION: Verbs that change the intended task.
+        HALLUCINATION: HYP contains text not found in GT.
+        OMISSION: GT contains text not found in HYP.
+        SAFETY: Benign words misheard as profanity or slurs.
+        FORMALITY: Grammar, tense, or filler word (um/ah) differences.
+    3. Assign a SEVERITY_LEVEL and SEVERITY_SCORE for each word:
+        * CRITICAL (9-10): Reverses meaning (negation), misrecognizes Named entities, introduces safety risk, or breaks a command.
+        * MAJOR (6-8): The intent is understood but key information is wrong like Values, Common entities (e.g., "set a timer for 5 minutes" → "set a timer for 15 minutes").
+        * MINOR (3-5): Understandable but requires mental effort to correct.
+        * NEGLIGIBLE (1-2): FORM, Cosmetic, punctuation, grammatical (Tense/Morphological variation)
+            Examples - helped --> help, is running --> runs, was --> is, singular --> plural.
+        * FILLER(0): removal of filler words. 
+            Examples - uh, oh, umm, ahh, ah, hmmm...etc
+        *** This MUST be assigned based on the impact of that word on the whole sentence. ***
+    4. Calculate the semantic_distance for each word (0 being highly similar, 1 being not at all similar) between GT and Hypothesis.
+    5. Calculate the costs for each error:
+        - substitution cost = SEVERITY_LEVEL * semantic_distance
+        - deletion cost = SEVERITY_LEVEL of the missing GT word * del_type. 
+            1. Must get del_type float using the below information - 
+                * FILLER/FORMALITY: 0.1
+                * Non-critical function words (a/the/to/of): 0.2–0.3
+                * Content words (nouns/verbs/adjectives): 0.4–0.6
+                * COMMON ENTITY (generic nouns like "bag", "table", "coffee"): 0.6-0.8
+                * VALUE/NEGATION/ACTION: 0.8-1.0
+                * NAMED ENTITY (person/org/location/brand/product/title): 1.0
+        - insertion cost = 0.5 * SEVERITY_LEVEL of the inserted word.
+        - sum of all costs must be 0 IF AND ONLY IF the Hypothesis is exact match to GT otherwise it must be some value greater than 0.
+    6. Give the entire GT sentence with severity level (Must follow above SEVERITY_LEVEL instructions and strictly greater than or equal to 1 if its not a filler word) as severity_words. Format must be sentence of GT_word(SEVERITY_LEVEL)
+    7. Then add an 'IntentFlip':
+        - IntentFlip = 1 is a MUST if the ASR output :
+                * Cancels, Negates or Opposes the original intent/meaning of the GT.
+                * Breaks an idiom and doesn't preserve the meaning of the idiom.
+        - IntentFlip = 0.5 is a MUST if the ASR output :
+                * Completely looses the original intent/meaning of the GT by misrecognizing the main subject.
+        - IntentFlip = 0 ONLY when.
+                * the above conditions are not met.
+        - Orthography errors comes under IntentFlip=0.
+        - Give me a brief reason (IF_reason) how did you set this IntentFlip.
+    8. Calculate the sentence_semantic_distance (0 being highly similar, 1 being not at all similar) between GT and Hypothesis.
+
+### Output format
+*** MUST FOLLOW THIS OUTPUT SCHEMA (JSON ONLY) ***
+{
+  "mismatches": [
+    {
+      "gt_span": "string",
+      "hyp_span": "string",
+      "error_type": "string",
+      "SEVERITY_LEVEL": "string",
+      "SEVERITY_SCORE": "int",
+      "reason": "string", 
+      "del_type": "float",
+    }
+  ]
+  "IntentFlip": "float",
+  "IF_reason": "string",
+  "sum of all costs": "float",
+  "sum of GT SEVERITY_LEVEL": "int",
+  "sentence_semantic_distance": "float",
+  "severity_words": "string"
+}
+"""
