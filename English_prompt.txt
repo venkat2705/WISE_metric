@@ -25,15 +25,15 @@ ENGLISH_PROMPT = """
     4. Calculate the semantic_distance for each word (0 being highly similar, 1 being not at all similar) between GT and Hypothesis.
     5. Calculate the costs for each error:
         - substitution cost = SEVERITY_LEVEL * semantic_distance
-        - deletion cost = SEVERITY_LEVEL of the missing GT word * del_type. 
-            1. Must get del_type float using the below information - 
+        - insertion cost =  SEVERITY_LEVEL of the missing GT word * indel_type.
+        - deletion cost = SEVERITY_LEVEL of the missing GT word * indel_type. 
+            1. Must get indel_type float using the below information - 
                 * FILLER/FORMALITY: 0.1
                 * Non-critical function words (a/the/to/of): 0.2–0.3
                 * Content words (nouns/verbs/adjectives): 0.4–0.6
                 * COMMON ENTITY (generic nouns like "bag", "table", "coffee"): 0.6-0.8
                 * VALUE/NEGATION/ACTION: 0.8-1.0
                 * NAMED ENTITY (person/org/location/brand/product/title): 1.0
-        - insertion cost = 0.5 * SEVERITY_LEVEL of the inserted word.
         - sum of all costs must be 0 IF AND ONLY IF the Hypothesis is exact match to GT otherwise it must be some value greater than 0.
     6. Give the entire GT sentence with severity level (Must follow above SEVERITY_LEVEL instructions and strictly greater than or equal to 1 if its not a filler word) as severity_words. Format must be sentence of GT_word(SEVERITY_LEVEL)
     7. Then add an 'IntentFlip':
@@ -59,7 +59,7 @@ ENGLISH_PROMPT = """
       "SEVERITY_LEVEL": "string",
       "SEVERITY_SCORE": "int",
       "reason": "string", 
-      "del_type": "float",
+      "indel_type": "float",
     }
   ]
   "IntentFlip": "float",
