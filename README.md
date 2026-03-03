@@ -1,5 +1,5 @@
 # WISE_metric
-This is a repo to understand WISE metric better.
+Prompt for the paper "WISE: A Metric for ASR Evaluation with Intent and Semantic Awareness"
 
 ## English prompt
 
