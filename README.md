@@ -1,5 +1,5 @@
 # WISE_metric
-Prompt for the paper "WISE: A Metric for ASR Evaluation with Intent and Semantic Awareness"
+Prompt for the paper "WISE: AN INTENT- AND SEMANTICS-AWARE METRIC FOR ASR EVALUATION"
 
 ## English prompt
 
