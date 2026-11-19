@@ -50,7 +50,7 @@ SYSTEM_PROMPT = """
                 * NAMED ENTITY (person/org/location/brand/product/title): 1.0
         - insertion cost = 0.5 * SEVERITY_SCORE of the inserted word.
         - sum of all costs must be 0 IF AND ONLY IF the Hypothesis is exact match to GT otherwise it must be some value greater than 0.
-    6. Give the entire GT sentence with severity level (Must follow above SEVERITY_LEVEL instructions and strictly greater than or equal to 1 if its not a filler word) as severity_words. Format must be sentence of GT_word(SEVERITY_LEVEL)
+    6. Give the entire GT sentence with severity level (Must follow above SEVERITY_LEVEL instructions and strictly greater than or equal to 1 if its not a filler word) as severity_words. Format must be sentence of GT_word(SEVERITY_SCORE), where SEVERITY_SCORE is the integer score (e.g. "Call(9) 911(10)")
     7. Then add an 'IntentJump':
         - IntentJump = 1 if the ASR output changes or cancel the original intent or if it breaks an idiom; otherwise 0
         - It must be 1 ONLY if the intent/meaning of the GT is totally flipped or broken in the Hypothesis. 
@@ -66,6 +66,7 @@ SYSTEM_PROMPT = """
       "error_type": "string",
       "SEVERITY_LEVEL": "string",
       "SEVERITY_SCORE": "int",
+      "semantic_distance": "float",
       "reason": "string", 
       "del_type": "float"
     }
@@ -110,6 +111,10 @@ def main() -> int:
     ap.add_argument("--hyp_file", type=str, required=True)
     ap.add_argument("--output_tsv", type=str, required=True)
     ap.add_argument("--model", type=str, default="gemini-2.5-pro")
+    ap.add_argument("--backend", type=str, choices=["gemini", "openai"], default="gemini",
+                    help="gemini: Gemini API; openai: OpenAI-compatible endpoint (e.g. local Gemma 4 31B on vLLM)")
+    ap.add_argument("--base_url", type=str, default="http://localhost:8000/v1",
+                    help="endpoint for --backend openai")
     args = ap.parse_args()
 
     #Checking if gt and hyp file are valid
@@ -120,11 +125,16 @@ def main() -> int:
         return 2
         
     # Keep your existing client usage pattern
-    client = genai.Client(api_key="") #add your own api key
+    if args.backend == "gemini":
+        client = genai.Client(api_key="") #add your own api key
+    else:
+        from openai import OpenAI
+        client = OpenAI(base_url=args.base_url, api_key=os.environ.get("OPENAI_API_KEY", "EMPTY"))
     os.makedirs(os.path.dirname(args.output_tsv) or ".", exist_ok=True)
     # Token counters (your originals)
     total_token_count = 0
     num_rows = 0
+    num_failures = 0
 
     # Keep gen config stable
     gen_cfg = {
@@ -138,6 +148,28 @@ def main() -> int:
 
     #Funtion to call the model
     def call_model_fn(user_prompt: str):
+        if args.backend == "openai":
+            # Locally hosted open-weight model, same prompt and deterministic decoding (Sec. 4.1)
+            resp = client.chat.completions.create(
+                model=args.model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=gen_cfg["temperature"],
+                top_p=gen_cfg["top_p"],
+                seed=gen_cfg["seed"],
+                response_format={"type": "json_object"},
+                extra_body={"top_k": gen_cfg["top_k"]},
+            )
+            text = (resp.choices[0].message.content or "").strip()
+            usage = {"total_token_count": getattr(resp.usage, "total_tokens", 0) if resp.usage else 0}
+            try:
+                data = json.loads(text) if text else None
+            except json.JSONDecodeError:
+                data = None
+            return data, usage
+
         resp = client.models.generate_content(
             model=args.model,
             contents=[{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -151,13 +183,11 @@ def main() -> int:
             ),
         )
         text = (resp.text or "").strip()
-        try:
-            data = json.loads(text) if text else {}
-        except json.JSONDecodeError:
-            # Write a row with blanks but preserve GT/HYP so you can spot failures.
-            out_f.write(f"{gt}\t{hyp}\t\t0\t\t\tMODEL_RETURNED_INVALID_JSON\n")
-            return {}, {}
         usage = {"total_token_count": getattr(resp.usage_metadata, "total_token_count", 0),}
+        try:
+            data = json.loads(text) if text else None
+        except json.JSONDecodeError:
+            data = None  # handled in the main loop: one failure row per pair
         return data, usage
         
     with open(args.output_tsv, "w", encoding="utf-8") as out_f:
@@ -179,10 +209,11 @@ def main() -> int:
             IntentJump = safe_int(parsed.get("IntentJump", 0))
             severity_words = parsed.get("severity_words", "")
             sentence_semantic_distance = safe_float(parsed.get("sentence_semantic_distance", 0.0))
-            sum_of_all_costs = parsed.get("sum of all costs", 0)            
+            sum_of_all_costs = safe_float(parsed.get("sum of all costs", 0))  # E, Eq. (3)            
             computed_sum = compute_gt_severity_sum_from_severity_words(severity_words)
             sum_of_GT_severity = computed_sum
             
+            # Eq. (2), term (i): P_sev = E / sum_i s(w_i)
             if sum_of_GT_severity != 0:
                 SW_SER = round(sum_of_all_costs / sum_of_GT_severity, 4) 
             else:
@@ -206,14 +237,16 @@ def main() -> int:
             if not mismatches:
                 error_type = [None]
                 
-            #Formula Implementation    
+            #Formula Implementation
+            # Eq. (2), terms (ii)*(iii): P_flip = (1 - exp(-D/2)) * IntentJump
+            # Eq. (1): WISE = 100 - 100 * min(1, P_sev + P_flip)
             sementic_error_score = min(1,SW_SER + (IntentJump * (1 - math.exp(-0.5 * sentence_semantic_distance))))
             wise_score = round((1 - sementic_error_score) * 100, 2)
             out_f.write(f"{gt}\t{hyp}\t{error_type}\t{wise_score}\t{IntentJump}\t{sum_of_all_costs}\t{sum_of_GT_severity}\t{severity_words}\t{sentence_semantic_distance}\t{mismatches}\n")
 
     # Original prints
     print(f"total_tokens is {total_token_count}")
-    print(f"total {num_rows} are processed.")
+    print(f"total {num_rows} are processed ({num_failures} failed).")
     return 0
 
     
